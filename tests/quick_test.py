@@ -33,28 +33,39 @@ def main():
     print(f"   Generated {len(shares_low)} shares")
 
     attack = AttackSimulator(sss_low)
-    success, leaked, t = attack.brute_force_low_degree(shares_low[:2], 1, secret)
-    print(f"   Attack with 2 shares: {'SUCCESS' if success else 'FAILED'}")
-    if success:
-        print(f"   Leaked secret: {leaked}")
-    print(f"   Time: {t:.6f}s")
+    collusion = attack.collusion_attack(shares_low[:2], 2, secret)
+    print(f"   Collusion attack with 2 shares: {'SUCCESS' if collusion['success'] else 'FAILED'}")
+    if collusion["success"]:
+        print(f"   Leaked secret: {collusion['reconstructed_secret']}")
+    print(f"   Time: {collusion['time']:.6f}s")
 
-    print("\n3. Testing High-Degree (Secure) Configuration...")
+    tamper = attack.tamper_share_attack(shares_low, 2, secret)
+    print(f"   Tampering attack without integrity: {'SUCCESS' if tamper['success'] else 'FAILED'}")
+
+    print("\n3. Testing High-Degree + Share Integrity (Secure) Configuration...")
     sss_high = ShamirSecretSharing()
     prevention = PreventionMechanism(sss_high)
-    secure_config = prevention.apply_high_degree(secret, 5, 4)
+    secure_config = prevention.apply_high_degree(secret, 5, 4, enable_integrity=True)
     print(f"   Polynomial degree: 3 (HIGH)")
     print(f"   Threshold: {secure_config['threshold']}")
 
     attack_high = AttackSimulator(sss_high)
-    success_high, _, _ = attack_high.brute_force_low_degree(sss_high.shares[:2], 1, secret)
-    print(f"   Attack with 2 shares: {'SUCCESS' if success_high else 'BLOCKED'}")
+    collusion_high = attack_high.collusion_attack(sss_high.shares[:2], 2, secret)
+    print(f"   Collusion attack with 2 shares: {'SUCCESS' if collusion_high['success'] else 'BLOCKED'}")
+
+    tamper_high = attack_high.tamper_share_attack(
+        sss_high.shares,
+        4,
+        secret,
+        share_commitments=secure_config["share_commitments"],
+    )
+    print(f"   Tampering attack with integrity: {'DETECTED' if tamper_high['detected'] else 'NOT DETECTED'}")
 
     reconstructed = sss_high.reconstruct_secret(sss_high.shares[:4])
     print(f"   Proper reconstruction with 4 shares: {'SUCCESS' if reconstructed == secret else 'FAILED'}")
 
     print("\nAll basic tests passed!")
-    print("Ready for full test suite and GUI demonstration.")
+    print("Ready for the comparison suite and GUI demonstration.")
 
 
 if __name__ == "__main__":

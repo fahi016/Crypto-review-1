@@ -1,6 +1,6 @@
 import hashlib
 import random
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .finite_field import FiniteField
 
@@ -17,6 +17,7 @@ class ShamirSecretSharing:
         self.shares = []
         self.coefficients = []
         self.commitments = []
+        self.share_commitments = {}
         self.secret = None
         self.threshold = None
         self.total_shares = None
@@ -52,10 +53,28 @@ class ShamirSecretSharing:
             self.commitments.append(commitment)
         return self.commitments
 
-    def verify_share(self, share: Tuple[int, int], commitments: List[int]) -> bool:
+    @staticmethod
+    def _share_digest(share: Tuple[int, int]) -> str:
         x, y = share
-        expected_y = self.evaluate_polynomial(x)
-        return y == expected_y
+        return hashlib.sha256(f"{x}:{y}".encode()).hexdigest()
+
+    def create_share_commitments(self, shares: Optional[List[Tuple[int, int]]] = None) -> Dict[int, str]:
+        """Create public integrity commitments for each share."""
+        share_list = shares if shares is not None else self.shares
+        self.share_commitments = {x: self._share_digest((x, y)) for x, y in share_list}
+        return dict(self.share_commitments)
+
+    def verify_share(self, share: Tuple[int, int], commitments: Dict[int, str]) -> bool:
+        if not commitments:
+            return False
+        x, y = share
+        expected_digest = commitments.get(x)
+        if expected_digest is None:
+            return False
+        return expected_digest == self._share_digest((x, y))
+
+    def verify_shares(self, shares: List[Tuple[int, int]], commitments: Dict[int, str]) -> bool:
+        return all(self.verify_share(share, commitments) for share in shares)
 
     @staticmethod
     def lagrange_interpolation(shares: List[Tuple[int, int]], prime: int, x: int = 0) -> int:
@@ -78,4 +97,3 @@ class ShamirSecretSharing:
             raise ValueError(f"Need at least {self.threshold} shares, got {len(shares)}")
         secret = self.lagrange_interpolation(shares, self.prime, 0)
         return secret
-
