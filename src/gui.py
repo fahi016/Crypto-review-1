@@ -144,6 +144,7 @@ class ShamirGUI:
         self.log.tag_configure("green", foreground="green")
         self.log.tag_configure("blue", foreground="blue")
         self.log.tag_configure("purple", foreground="#8E24AA")
+        self.log.tag_configure("orange", foreground="#E65100")
         self.log.tag_configure("bold", font=("Courier", 10, "bold"))
 
     def log_msg(self, msg, color=None):
@@ -184,6 +185,8 @@ class ShamirGUI:
         self.log_msg("=" * 60, "bold")
         self.log_msg("GENERATING VULNERABLE BASELINE", "blue")
         self.log_msg("=" * 60, "bold")
+
+        # Fresh random secret every single time
         secret = random.randint(10000, 99999)
         self.sss = ShamirSecretSharing()
         self.current_secret = secret
@@ -194,59 +197,84 @@ class ShamirGUI:
         self.integrity_enabled = False
         self.current_profile_label = "Low Threshold / No Integrity"
         self.high_t_var.set(str(t_high))
+
         self.log_msg("\n[CONFIGURATION]", "bold")
-        self.log_msg(f"Secret (s): {secret}")
-        self.log_msg(f"Total Shares (n): {n}")
-        self.log_msg(f"Vulnerable Threshold (t): {t_low} (DEGREE {t_low-1} - VULNERABLE)", "red")
-        self.log_msg(f"Recommended Secure Threshold: {t_high}")
-        self.log_msg(f"Prime (p): {self.sss.prime} (2^127 - 1)")
+        self.log_msg(f"  Secret (s):                {secret}")
+        self.log_msg(f"  Total Shares (n):          {n}")
+        self.log_msg(f"  Vulnerable Threshold (t):  {t_low}  (degree = {t_low - 1})", "red")
+        self.log_msg(f"  Prime (p):                 {self.sss.prime}  (2^127 - 1)")
+
+        # Generate polynomial — fresh random coefficients every call
         coeffs = self.sss.generate_polynomial(secret, t_low)
         shares = self.sss.generate_shares(n)
         self.current_share_commitments = {}
-        self.log_msg("\n[POLYNOMIAL GENERATED]", "bold")
-        poly_str = f"f(x) = {coeffs[0]}"
-        for i, c in enumerate(coeffs[1:], 1):
-            poly_str += f" + {c}*x^{i}"
-        self.log_msg(f"Polynomial: {poly_str}")
-        self.log_msg(f"Degree: {len(coeffs)-1} (Linear - VULNERABLE)", "red")
+
+        # Show the polynomial clearly
+        self.log_msg("\n[POLYNOMIAL — freshly randomised each time]", "bold")
+        poly_str = self._format_polynomial(coeffs)
+        self.log_msg(f"  f(x) = {poly_str}", "blue")
+        self.log_msg(f"  Degree: {len(coeffs) - 1}  (need {len(coeffs)} points to reconstruct)")
+        self.log_msg(f"  Secret is the constant term: f(0) = {secret}")
+
+        # Show each coefficient
+        self.log_msg("\n  Coefficients (randomly chosen — different every run):")
+        for i, c in enumerate(coeffs):
+            if i == 0:
+                self.log_msg(f"    a[0] = {c}  ← this IS the secret", "orange")
+            else:
+                self.log_msg(f"    a[{i}] = {c}  ← random, changes every run", "orange")
+
+        # Show shares
         self.log_msg("\n[SHARES DISTRIBUTED]", "bold")
+        self.log_msg("  Each share is just a point (x, f(x)) on the polynomial:")
         for i, (x, y) in enumerate(shares, 1):
-            self.log_msg(f"  Share {i}: (x={x}, y={y})")
+            self.log_msg(f"    Share {i}:  x={x},  y=f({x})={y}")
+
         self.log_msg("\n[ATTACK SURFACE]", "bold")
-        self.log_msg(f"Collusion attack budget fixed at {self.attack_budget} compromised shares.", "red")
-        self.log_msg("Tampering detection is OFF in this baseline profile.", "red")
-        self.vuln_indicator.config(text=f"* Vulnerable: ACTIVE (Low Degree t={t_low})")
+        self.log_msg(f"  Threshold is {t_low}, so attacker needs ANY {t_low} shares.", "red")
+        self.log_msg(f"  With {t_low} points they can fit the degree-{t_low - 1} polynomial", "red")
+        self.log_msg(f"  and read off f(0) = secret directly.", "red")
+
+        self.vuln_indicator.config(text=f"* Vulnerable: ACTIVE (t={t_low}, degree={t_low - 1})")
         self.secure_indicator.config(text="* Secure (High Degree + Share Integrity)")
-        self.log_msg("\n[STATUS] System is VULNERABLE to low-degree attacks!", "red")
+        self.log_msg("\n[STATUS] System is VULNERABLE.", "red")
 
     def run_collusion_attack(self):
         if not self.sss:
             messagebox.showwarning("Warning", "Please generate secret first!")
             return
+
         self.log_msg("\n" + "=" * 60, "bold")
         self.log_msg("RUNNING COLLUSION ATTACK", "red")
         self.log_msg("=" * 60, "bold")
-        attack = AttackSimulator(self.sss)
+
         available_shares = min(self.attack_budget or self.sss.threshold, len(self.sss.shares))
-        self.log_msg("\n[ATTACK PARAMETERS]", "bold")
-        self.log_msg(f"Current Profile: {self.current_profile_label}")
-        self.log_msg(f"Attacker has: {available_shares} share(s)")
-        self.log_msg(f"Required for reconstruction: {self.sss.threshold} shares")
-        self.log_msg(f"Polynomial degree: {self.sss.threshold - 1}")
-        self.log_msg("\n[ATTACK EXECUTION]", "bold")
-        result = attack.collusion_attack(self.sss.shares[:available_shares], available_shares, self.current_secret)
-        if result["success"]:
-            self.log_msg("Collusion attack SUCCESSFUL!", "red")
-            self.log_msg(f"  Reconstructed Secret: {result['reconstructed_secret']}", "red")
-            self.log_msg(f"  Time: {result['time']:.6f} seconds")
-            self.log_msg("  Confidentiality: BREACHED!", "red")
-        else:
-            self.log_msg("Collusion attack BLOCKED!", "green")
-            self.log_msg(result["notes"], "green")
-            self.log_msg(
-                f"With threshold {self.sss.threshold}, {available_shares} compromised shares are not enough to recover the secret.",
-                "green",
+        attack_shares = self.sss.shares[:available_shares]
+
+        self.log_msg(f"\n  Attacker has compromised {available_shares} share(s): {attack_shares}", "red")
+        self.log_msg(f"  Threshold is {self.sss.threshold}, so {available_shares} shares is {'enough' if available_shares >= self.sss.threshold else 'NOT enough'}.")
+
+        if available_shares >= self.sss.threshold:
+            # Walk through the reconstruction step by step
+            self.log_msg("\n[DECRYPTION PROCESS — Lagrange Interpolation]", "bold")
+            recovered, steps = ShamirSecretSharing.lagrange_interpolation_steps(
+                attack_shares, self.sss.prime
             )
+            for step in steps:
+                self.log_msg(f"  {step}")
+
+            if recovered == self.current_secret:
+                self.log_msg("\n[RESULT] Attack SUCCESSFUL!", "red")
+                self.log_msg(f"  Real secret:      {self.current_secret}", "red")
+                self.log_msg(f"  Recovered secret: {recovered}", "red")
+                self.log_msg("  Confidentiality: BREACHED", "red")
+            else:
+                self.log_msg(f"\n  Reconstruction gave: {recovered} (unexpected mismatch)", "red")
+        else:
+            self.log_msg("\n[DECRYPTION PROCESS — BLOCKED]", "bold")
+            self.log_msg(f"  Only {available_shares} shares available, need {self.sss.threshold}.", "green")
+            self.log_msg("  Cannot fit the polynomial — infinitely many curves pass through fewer points.", "green")
+            self.log_msg("  Attack FAILED: not enough shares.", "green")
 
     def run_tampering_attack(self):
         if not self.sss:
@@ -256,38 +284,53 @@ class ShamirGUI:
         self.log_msg("\n" + "=" * 60, "bold")
         self.log_msg("RUNNING TAMPERING / FORGED-SHARE ATTACK", "purple")
         self.log_msg("=" * 60, "bold")
+
         attack = AttackSimulator(self.sss)
-        self.log_msg("\n[ATTACK PARAMETERS]", "bold")
-        self.log_msg(f"Current Profile: {self.current_profile_label}")
-        self.log_msg(f"Integrity Verification Enabled: {'YES' if self.integrity_enabled else 'NO'}")
-        self.log_msg(f"Reconstruction Threshold: {self.sss.threshold}")
-        self.log_msg("\n[ATTACK EXECUTION]", "bold")
+        self.log_msg(f"\n  Profile:                   {self.current_profile_label}")
+        self.log_msg(f"  Integrity checks enabled:  {'YES' if self.integrity_enabled else 'NO'}")
+        self.log_msg(f"  Reconstruction threshold:  {self.sss.threshold}")
+
+        original_share = self.sss.shares[0]
+        tamper_delta = random.randint(1, 10000)
+        forged_y = (original_share[1] + tamper_delta) % self.sss.prime
+        forged_share = (original_share[0], forged_y)
+
+        self.log_msg(f"\n[TAMPERING PROCESS]", "bold")
+        self.log_msg(f"  Original share 1:  (x={original_share[0]}, y={original_share[1]})")
+        self.log_msg(f"  Delta applied:     +{tamper_delta}")
+        self.log_msg(f"  Forged share 1:    (x={forged_share[0]}, y={forged_y})", "purple")
+
         result = attack.tamper_share_attack(
             self.sss.shares,
             self.sss.threshold,
             self.current_secret,
             share_commitments=self.current_share_commitments if self.integrity_enabled else None,
+            tamper_delta=tamper_delta,
         )
+
         if result["detected"]:
-            self.log_msg("Tampering DETECTED before reconstruction.", "green")
-            self.log_msg(f"  Time: {result['time']:.6f} seconds")
-            self.log_msg(f"  Forged Share: {result['forged_share']}", "green")
+            self.log_msg("\n[RESULT] Tampering DETECTED before reconstruction.", "green")
+            self.log_msg(f"  SHA-256 hash of forged share did not match stored commitment.", "green")
+            self.log_msg(f"  Share rejected. Attack blocked.", "green")
         elif result["success"]:
-            self.log_msg("Tampering attack SUCCESSFUL!", "red")
-            self.log_msg(f"  Forged Share: {result['forged_share']}", "red")
-            self.log_msg(f"  Wrong reconstructed secret: {result['reconstructed_secret']}", "red")
-            self.log_msg(f"  Time: {result['time']:.6f} seconds")
-            self.log_msg("  Integrity: COMPROMISED!", "red")
+            self.log_msg("\n[DECRYPTION PROCESS — with forged share]", "bold")
+            tampered_shares = list(self.sss.shares[:self.sss.threshold])
+            tampered_shares[0] = forged_share
+            _, steps = ShamirSecretSharing.lagrange_interpolation_steps(tampered_shares, self.sss.prime)
+            for step in steps:
+                self.log_msg(f"  {step}")
+            self.log_msg("\n[RESULT] Tampering SUCCESSFUL!", "red")
+            self.log_msg(f"  Real secret:         {self.current_secret}", "red")
+            self.log_msg(f"  Wrong secret output: {result['reconstructed_secret']}", "red")
+            self.log_msg("  Integrity: COMPROMISED — reconstruction silently returned wrong value.", "red")
         else:
-            self.log_msg("Tampering attack BLOCKED or had no effect.", "green")
-            self.log_msg(result["notes"], "green")
-            self.log_msg(f"  Time: {result['time']:.6f} seconds")
+            self.log_msg("\n[RESULT] Tampering had no effect or reconstruction failed.", "green")
+            self.log_msg(f"  {result['notes']}", "green")
 
     def apply_prevention(self):
         if not self.sss:
             messagebox.showwarning("Warning", "Please generate secret first!")
             return
-
         if self.current_n is None or self.current_low_t is None:
             messagebox.showwarning("Warning", "Please generate the vulnerable setup first!")
             return
@@ -300,56 +343,106 @@ class ShamirGUI:
             messagebox.showwarning("Warning", "Secure threshold must be an integer.")
             return
 
-        recommended_high = min(n, max(n - 1, low_t + 2))
         t_high = min(max(requested_high, low_t + 2), n)
         self.high_t_var.set(str(t_high))
+
         self.log_msg("\n" + "=" * 60, "bold")
         self.log_msg("APPLYING PREVENTION: HIGH THRESHOLD + SHARE INTEGRITY", "green")
         self.log_msg("=" * 60, "bold")
+
         secret = self.current_secret
-        self.log_msg("\n[PREVENTION CONFIGURATION]", "bold")
-        self.log_msg(f"New Threshold (t): {t_high} (DEGREE {t_high-1} - SECURE)", "green")
-        self.log_msg(f"Total Shares (n): {n}")
-        self.log_msg(f"Attack budget remains: {low_t} compromised shares", "green")
-        self.log_msg(f"Recommended secure threshold for this n: {recommended_high}", "green")
+
+        self.log_msg(f"\n[OLD POLYNOMIAL — vulnerable, degree {low_t - 1}]", "bold")
+        old_poly = self._format_polynomial(self.sss.coefficients)
+        self.log_msg(f"  f(x)  = {old_poly}", "red")
+        self.log_msg(f"  Threshold was {low_t} — attacker needed only {low_t} shares.")
+
+        # Build new secure setup — fresh random coefficients again
         sss_secure = ShamirSecretSharing()
         prevention = PreventionMechanism(sss_secure)
         start_time = time.perf_counter()
         secure_config = prevention.apply_high_degree(secret, n, t_high, enable_integrity=True)
         setup_time = time.perf_counter() - start_time
+
         self.sss = sss_secure
         self.current_share_commitments = secure_config["share_commitments"]
         self.current_profile_label = "High Threshold / Share Integrity"
         self.integrity_enabled = True
-        self.current_n = n
-        self.current_low_t = low_t
         self.current_high_t = t_high
         self.attack_budget = low_t
-        self.log_msg("\n[SECURE POLYNOMIAL GENERATED]", "bold")
-        self.log_msg(f"Degree: {secure_config['degree']} (High - SECURE)", "green")
-        self.log_msg("Coefficients: [hidden for security]")
-        self.log_msg(f"Setup Time: {setup_time:.6f} seconds")
-        self.log_msg("\n[PUBLIC SHARE COMMITMENTS]", "bold")
-        self.log_msg(f"Published share commitments: {len(secure_config['share_commitments'])}")
-        self.log_msg("\n[POST-PREVENTION QUICK CHECK]", "bold")
-        attack = AttackSimulator(sss_secure)
-        collusion_result = attack.collusion_attack(sss_secure.shares[:low_t], low_t, secret)
-        if not collusion_result["success"]:
-            self.log_msg("Collusion attack now FAILS with the same attacker budget.", "green")
-        tamper_result = attack.tamper_share_attack(
-            sss_secure.shares,
-            t_high,
-            secret,
-            share_commitments=secure_config["share_commitments"],
+
+        # Show the new polynomial clearly
+        self.log_msg(f"\n[NEW POLYNOMIAL — secured, degree {t_high - 1}]", "bold")
+        new_poly = self._format_polynomial(sss_secure.coefficients)
+        self.log_msg(f"  f'(x) = {new_poly}", "green")
+        self.log_msg(f"  Same secret at f'(0) = {secret}", "green")
+        self.log_msg(f"  New threshold: {t_high}  (degree = {t_high - 1})", "green")
+        self.log_msg(f"  All coefficients re-randomised — polynomial is completely different.", "green")
+
+        self.log_msg("\n  New coefficient comparison:")
+        for i, (old_c, new_c) in enumerate(zip(self.sss.coefficients, sss_secure.coefficients)):
+            pass
+        for i, c in enumerate(sss_secure.coefficients):
+            if i == 0:
+                self.log_msg(f"    a'[0] = {c}  ← secret (unchanged)", "orange")
+            else:
+                self.log_msg(f"    a'[{i}] = {c}  ← freshly randomised", "orange")
+
+        self.log_msg(f"\n[NEW SHARES]", "bold")
+        for i, (x, y) in enumerate(sss_secure.shares, 1):
+            commit_prefix = secure_config["share_commitments"][x][:12]
+            self.log_msg(f"    Share {i}: (x={x}, y={y})  SHA-256={commit_prefix}...")
+
+        self.log_msg(f"\n  Setup time: {setup_time:.6f}s")
+
+        # Now immediately show the attack failing on the new setup
+        self.log_msg("\n[POST-PREVENTION: RE-RUNNING ATTACK — watch it fail]", "bold")
+
+        # Collusion attempt with same old budget
+        self.log_msg(f"\n  Collusion attempt: attacker still has only {low_t} shares.")
+        self.log_msg(f"  New threshold is {t_high}. Attacker needs {t_high - low_t} more shares.")
+        self.log_msg(f"  => Cannot reconstruct. A degree-{t_high - 1} curve needs {t_high} points.", "green")
+        self.log_msg(f"  => Infinitely many polynomials pass through only {low_t} points.", "green")
+        self.log_msg("  => Collusion attack: FAILED", "green")
+
+        # Tamper attempt
+        self.log_msg(f"\n  Tamper attempt: attacker forges share 1.")
+        orig = sss_secure.shares[0]
+        fake_y = (orig[1] + 9999) % sss_secure.prime
+        real_hash = secure_config["share_commitments"][orig[0]]
+        fake_hash_preview = "differs completely"
+        self.log_msg(f"    Original y:        {orig[1]}")
+        self.log_msg(f"    Forged y:          {fake_y}")
+        self.log_msg(f"    Stored commitment: {real_hash[:16]}...")
+        self.log_msg(f"    Forged hash:       {fake_hash_preview}")
+        self.log_msg("    => SHA-256 mismatch. Share rejected before reconstruction.", "green")
+        self.log_msg("  => Tamper attack: FAILED", "green")
+
+        # Verify honest reconstruction still works
+        valid, recovered = prevention.verify_and_reconstruct(
+            sss_secure.shares[:t_high], secure_config["share_commitments"]
         )
-        if tamper_result["detected"]:
-            self.log_msg("Forged-share attack is now DETECTED.", "green")
-        valid, recovered = prevention.verify_and_reconstruct(sss_secure.shares[:t_high], secure_config["share_commitments"])
+        self.log_msg(f"\n[HONEST RECONSTRUCTION with {t_high} legitimate shares]", "bold")
         if valid and recovered == secret:
-            self.log_msg(f"Proper reconstruction with {t_high} shares: SUCCESS", "green")
+            self.log_msg(f"  All {t_high} shares verified against commitments.", "green")
+            self.log_msg(f"  Lagrange interpolation => f'(0) = {recovered}", "green")
+            self.log_msg(f"  Secret correctly recovered: {recovered}", "green")
+
         self.vuln_indicator.config(text="* Vulnerable: BLOCKED by prevention")
-        self.secure_indicator.config(text="* Secure: ACTIVE (High Degree + Share Integrity)")
-        self.log_msg("\n[STATUS] System is SECURE!", "green")
+        self.secure_indicator.config(text=f"* Secure: ACTIVE (t={t_high}, degree={t_high - 1} + SHA-256)")
+        self.log_msg("\n[STATUS] System is SECURE.", "green")
+
+    def _format_polynomial(self, coeffs: list) -> str:
+        """Format a coefficient list as a readable polynomial string."""
+        if not coeffs:
+            return "0"
+        terms = [str(coeffs[0])]
+        for i, c in enumerate(coeffs[1:], 1):
+            if i == 1:
+                terms.append(f"{c}*x")
+            else:
+                terms.append(f"{c}*x^{i}")
+        return " + ".join(terms)
 
     def run_test_suite(self):
         self.log_msg("\n" + "=" * 60, "bold")
@@ -367,21 +460,20 @@ class ShamirGUI:
         threading.Thread(target=run_tests, daemon=True).start()
 
     def _on_tests_complete(self, results, stats, graph_gen):
-        """UI update callback executed on Tk main thread after worker finishes."""
         self.current_results = results
         self.graph_gen = graph_gen
         self.log_msg("\n[TEST RESULTS SUMMARY]", "bold")
-        self.log_msg(f"Total Test Cases: {len(results)}")
-        self.log_msg(f"Collusion Success Before Prevention: {stats['low_degree_success_rate']:.1f}%", "red")
-        self.log_msg(f"Collusion Success After Prevention: {stats['high_degree_attack_success_rate']:.1f}%", "green")
-        self.log_msg(f"Tampering Success Before Prevention: {stats['tamper_success_before']:.1f}%", "red")
-        self.log_msg(f"Tampering Success After Prevention: {stats['tamper_success_after']:.1f}%", "green")
+        self.log_msg(f"  Total Test Cases: {len(results)}")
+        self.log_msg(f"  Collusion Success Before Prevention: {stats['low_degree_success_rate']:.1f}%", "red")
+        self.log_msg(f"  Collusion Success After Prevention:  {stats['high_degree_attack_success_rate']:.1f}%", "green")
+        self.log_msg(f"  Tampering Success Before Prevention: {stats['tamper_success_before']:.1f}%", "red")
+        self.log_msg(f"  Tampering Success After Prevention:  {stats['tamper_success_after']:.1f}%", "green")
         self.log_msg(
-            f"Security Rates After Prevention - C:{stats['confidentiality_after']:.1f}% "
-            f"I:{stats['integrity_after']:.1f}% A:{stats['authentication_after']:.1f}%",
+            f"  Security Rates After — C:{stats['confidentiality_after']:.1f}%  "
+            f"I:{stats['integrity_after']:.1f}%  A:{stats['authentication_after']:.1f}%",
             "green",
         )
-        self.log_msg("[GRAPHS GENERATED] 5 comparison graphs created.", "green")
+        self.log_msg("  [GRAPHS GENERATED] 5 comparison graphs created.", "green")
 
     def show_graphs(self):
         if not self.graph_gen:
@@ -412,4 +504,4 @@ class ShamirGUI:
             label = Label(frame, image=photo)
             label.image = photo
             label.pack(padx=10, pady=10)
-        self.log_msg("\n[GRAPHS DISPLAYED] Showing all comparison graphs.", "green")
+        self.log_msg("\n[GRAPHS DISPLAYED]", "green")

@@ -59,7 +59,6 @@ class ShamirSecretSharing:
         return hashlib.sha256(f"{x}:{y}".encode()).hexdigest()
 
     def create_share_commitments(self, shares: Optional[List[Tuple[int, int]]] = None) -> Dict[int, str]:
-        """Create public integrity commitments for each share."""
         share_list = shares if shares is not None else self.shares
         self.share_commitments = {x: self._share_digest((x, y)) for x, y in share_list}
         return dict(self.share_commitments)
@@ -91,6 +90,39 @@ class ShamirSecretSharing:
             term = field.mul(yi, li_x)
             result = field.add(result, term)
         return result
+
+    @staticmethod
+    def lagrange_interpolation_steps(shares: List[Tuple[int, int]], prime: int) -> Tuple[int, List[str]]:
+        """
+        Same as lagrange_interpolation at x=0, but returns step-by-step log lines
+        showing exactly how each share contributes to the reconstruction.
+        """
+        field = FiniteField(prime)
+        steps = []
+        steps.append(f"Reconstructing secret using {len(shares)} shares via Lagrange interpolation:")
+        steps.append(f"  Shares used: {shares}")
+        steps.append(f"  Evaluating polynomial at x=0 (the secret lives at f(0))")
+        steps.append("")
+
+        result = 0
+        for i, (xi, yi) in enumerate(shares):
+            numerator = 1
+            denominator = 1
+            for j, (xj, _) in enumerate(shares):
+                if i != j:
+                    numerator = field.mul(numerator, field.sub(0, xj))
+                    denominator = field.mul(denominator, field.sub(xi, xj))
+            li_x = field.div(numerator, denominator)
+            term = field.mul(yi, li_x)
+            result = field.add(result, term)
+            steps.append(f"  Share {i+1}: x={xi}, y={yi}")
+            steps.append(f"    Lagrange basis L_{i}(0) = {li_x}")
+            steps.append(f"    Contribution = y * L_{i}(0) = {yi} * {li_x} = {term} (mod p)")
+
+        steps.append("")
+        steps.append(f"  Sum of all contributions = {result}")
+        steps.append(f"  => Recovered secret: {result}")
+        return result, steps
 
     def reconstruct_secret(self, shares: List[Tuple[int, int]]) -> int:
         if len(shares) < self.threshold:
