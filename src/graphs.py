@@ -2,9 +2,9 @@ import os
 
 import matplotlib
 
-# Use a non-interactive backend so graph generation is thread-safe with Tkinter apps.
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 from .test_runner import TestRunner
 
@@ -18,11 +18,29 @@ class GraphGenerator:
         "high_with_integrity": "#2e7d32",
     }
 
+    MIN_VISIBLE = 1.5  # minimum bar height so 0% bars are still visible
+
     def __init__(self, test_runner: TestRunner):
         self.test_runner = test_runner
         self.figures = {}
         self.output_dir = os.path.join(os.getcwd(), "output")
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def _bar_height(self, value):
+        """Return at least MIN_VISIBLE so zero bars still show on the chart."""
+        return max(value, self.MIN_VISIBLE)
+
+    def _annotate_bar(self, ax, bar, real_value):
+        """Put the real percentage label above the bar."""
+        height = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height + 0.5,
+            f"{real_value:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
 
     def generate_all_graphs(self):
         self.fig1_success_rate()
@@ -35,12 +53,12 @@ class GraphGenerator:
         stats = self.test_runner.calculate_statistics()
         fig, ax = plt.subplots(figsize=(10, 6))
         categories = ["Before Prevention\n(Low Threshold)", "After Prevention\n(High Threshold + Integrity)"]
-        success_rates = [stats["low_degree_success_rate"], stats["high_degree_attack_success_rate"]]
+        real_rates = [stats["low_degree_success_rate"], stats["high_degree_attack_success_rate"]]
+        display_rates = [self._bar_height(r) for r in real_rates]
         colors = ["#ff4444", "#44ff44"]
-        bars = ax.bar(categories, success_rates, color=colors, alpha=0.85, edgecolor="black", linewidth=2)
-        for bar, rate in zip(bars, success_rates):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{rate:.1f}%", ha="center", va="bottom")
+        bars = ax.bar(categories, display_rates, color=colors, alpha=0.85, edgecolor="black", linewidth=2)
+        for bar, real in zip(bars, real_rates):
+            self._annotate_bar(ax, bar, real)
         ax.set_ylabel("Collusion Attack Success Rate (%)")
         ax.set_title("Before vs After Prevention: Collusion Attack Success Rate")
         ax.set_ylim(0, 110)
@@ -93,14 +111,19 @@ class GraphGenerator:
         stats = self.test_runner.calculate_statistics()
         fig, ax = plt.subplots(figsize=(11, 6))
         categories = ["Confidentiality", "Integrity", "Authentication"]
-        before = [stats["confidentiality_before"], stats["integrity_before"], stats["authentication_before"]]
-        after = [stats["confidentiality_after"], stats["integrity_after"], stats["authentication_after"]]
+
+        real_before = [stats["confidentiality_before"], stats["integrity_before"], stats["authentication_before"]]
+        real_after  = [stats["confidentiality_after"],  stats["integrity_after"],  stats["authentication_after"]]
+
+        display_before = [self._bar_height(v) for v in real_before]
+        display_after  = [self._bar_height(v) for v in real_after]
+
         positions = range(len(categories))
         width = 0.35
 
         before_bars = ax.bar(
             [p - width / 2 for p in positions],
-            before,
+            display_before,
             width=width,
             color="#ef5350",
             alpha=0.85,
@@ -109,7 +132,7 @@ class GraphGenerator:
         )
         after_bars = ax.bar(
             [p + width / 2 for p in positions],
-            after,
+            display_after,
             width=width,
             color="#66bb6a",
             alpha=0.85,
@@ -117,10 +140,10 @@ class GraphGenerator:
             label="After Prevention",
         )
 
-        for bars in (before_bars, after_bars):
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.1f}%", ha="center", va="bottom")
+        for bar, real in zip(before_bars, real_before):
+            self._annotate_bar(ax, bar, real)
+        for bar, real in zip(after_bars, real_after):
+            self._annotate_bar(ax, bar, real)
 
         ax.set_xticks(list(positions))
         ax.set_xticklabels(categories)
@@ -138,19 +161,25 @@ class GraphGenerator:
         stats = self.test_runner.calculate_statistics()["profiles"]
         fig, ax = plt.subplots(figsize=(11, 6))
         categories = [stats[profile]["label"] for profile in self.PROFILE_ORDER]
-        attack_times = [
-            (stats[profile]["avg_collusion_time"] + stats[profile]["avg_tamper_time"]) * 1000 for profile in self.PROFILE_ORDER
+
+        real_attack = [
+            (stats[p]["avg_collusion_time"] + stats[p]["avg_tamper_time"]) * 1000
+            for p in self.PROFILE_ORDER
         ]
-        protection_times = [
-            (stats[profile]["avg_setup_time"] + stats[profile]["avg_verification_time"]) * 1000
-            for profile in self.PROFILE_ORDER
+        real_protection = [
+            (stats[p]["avg_setup_time"] + stats[p]["avg_verification_time"]) * 1000
+            for p in self.PROFILE_ORDER
         ]
+
+        display_attack     = [self._bar_height(v) for v in real_attack]
+        display_protection = [self._bar_height(v) for v in real_protection]
+
         positions = range(len(categories))
         width = 0.35
 
         attack_bars = ax.bar(
             [p - width / 2 for p in positions],
-            attack_times,
+            display_attack,
             width=width,
             color="#ffb74d",
             alpha=0.85,
@@ -159,7 +188,7 @@ class GraphGenerator:
         )
         protection_bars = ax.bar(
             [p + width / 2 for p in positions],
-            protection_times,
+            display_protection,
             width=width,
             color="#42a5f5",
             alpha=0.85,
@@ -167,16 +196,17 @@ class GraphGenerator:
             label="Protection Overhead",
         )
 
-        for bars in (attack_bars, protection_bars):
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.3f}", ha="center", va="bottom")
+        for bar, real in zip(attack_bars, real_attack):
+            self._annotate_bar(ax, bar, real)
+        for bar, real in zip(protection_bars, real_protection):
+            self._annotate_bar(ax, bar, real)
 
         ax.set_xticks(list(positions))
         ax.set_xticklabels(categories, rotation=15, ha="right")
         ax.set_ylabel("Time (milliseconds)")
         ax.set_title("Attack vs Prevention Latency Overhead")
         ax.grid(axis="y", alpha=0.3)
+        ax.legend()
         plt.tight_layout()
         self.figures["latency"] = fig
         return fig
@@ -185,14 +215,19 @@ class GraphGenerator:
         stats = self.test_runner.calculate_statistics()["profiles"]
         fig, ax = plt.subplots(figsize=(11, 6))
         categories = [stats[profile]["label"] for profile in self.PROFILE_ORDER]
-        collusion_rates = [stats[profile]["collusion_success_rate"] for profile in self.PROFILE_ORDER]
-        tamper_rates = [stats[profile]["tamper_success_rate"] for profile in self.PROFILE_ORDER]
+
+        real_collusion = [stats[p]["collusion_success_rate"] for p in self.PROFILE_ORDER]
+        real_tamper    = [stats[p]["tamper_success_rate"]    for p in self.PROFILE_ORDER]
+
+        display_collusion = [self._bar_height(v) for v in real_collusion]
+        display_tamper    = [self._bar_height(v) for v in real_tamper]
+
         positions = range(len(categories))
         width = 0.35
 
         collusion_bars = ax.bar(
             [p - width / 2 for p in positions],
-            collusion_rates,
+            display_collusion,
             width=width,
             color="#e53935",
             alpha=0.85,
@@ -201,7 +236,7 @@ class GraphGenerator:
         )
         tamper_bars = ax.bar(
             [p + width / 2 for p in positions],
-            tamper_rates,
+            display_tamper,
             width=width,
             color="#8e24aa",
             alpha=0.85,
@@ -209,10 +244,10 @@ class GraphGenerator:
             label="Tampering Attack Success",
         )
 
-        for bars in (collusion_bars, tamper_bars):
-            for bar in bars:
-                height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.1f}%", ha="center", va="bottom")
+        for bar, real in zip(collusion_bars, real_collusion):
+            self._annotate_bar(ax, bar, real)
+        for bar, real in zip(tamper_bars, real_tamper):
+            self._annotate_bar(ax, bar, real)
 
         ax.set_xticks(list(positions))
         ax.set_xticklabels(categories, rotation=15, ha="right")
